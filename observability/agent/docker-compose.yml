@@ -1,0 +1,100 @@
+version: '3.9'
+
+x-common: &common
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  labels:
+    - 'logging=promtail'
+    - 'logging_jobname=containerlog'
+
+x-environment: &environment
+  TZ: $TZ
+  PUID: $PUID
+  PGID: $PGID
+
+services:
+  ######## Docker ########
+  portainer-agent:
+    container_name: portainer-agent
+    image: 'portainer/agent:2.19.4'
+    <<: *common
+    volumes:
+      - '/var/lib/docker/volumes:/var/lib/docker/volumes'
+      - '/var/run/docker.sock:/var/run/docker.sock'
+    ports:
+      - 9001:9001
+
+  ######## Metrics ########
+  cadvisor:
+    depends_on:
+      - portainer-agent
+    container_name: cadvisor
+    image: gcr.io/cadvisor/cadvisor:v0.47.1
+    platform: linux/aarch64
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    <<: *common
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    ports:
+      - 8080:8080
+    environment:
+      <<: *environment
+  
+  node-exporter:
+    depends_on:
+      - portainer-agent
+    container_name: node-exporter
+    image: prom/node-exporter:latest
+    command: 
+      - '--path.procfs=/host/proc' 
+      - '--path.sysfs=/host/sys'
+      - --collector.filesystem.ignored-mount-points
+      - "^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)"
+    <<: *common
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - 9100:9100
+    environment:
+      <<: *environment
+
+  ######## Logging ########
+  promtail:
+    depends_on:
+      - portainer-agent
+    container_name: promtail
+    image: grafana/promtail:2.9.3
+    command: -config.file=/etc/promtail/config.yml
+    <<: *common
+    volumes:
+      - $DOCKER__CONFIG/promtail/config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - 9080:9080
+      - 1514:1514
+    environment:
+      <<: *environment
+  
+  dozzle:
+    depends_on:
+      - portainer-agent
+    container_name: dozzle
+    image: amir20/dozzle:latest
+    <<: *common
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - 8082:8080
+    environment:
+      <<: *environment
+      DOZZLE_LEVEL: info
+      DOZZLE_TAILSIZE: 300
+      DOZZLE_FILTER: "status=running"
